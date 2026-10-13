@@ -40,7 +40,15 @@ export default async function handler(req, res) {
       }
     )
 
-    if (!r.ok) return res.status(502).json({ error: 'AI error ' + r.status })
+    if (!r.ok) {
+      const detail = await r.text()
+      console.error('Gemini error', r.status, detail)
+      return res.status(502).json({
+        error: 'AI error ' + r.status,
+        keySet: Boolean(process.env.GEMINI_API_KEY),
+        detail: detail.slice(0, 500),
+      })
+    }
 
     const data = await r.json()
     const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}'
