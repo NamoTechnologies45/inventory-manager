@@ -2,7 +2,7 @@
 // Keeps your Gemini API key on the server, never in the browser.
 // Env var needed on Vercel (and in .env.local for local testing): GEMINI_API_KEY
 
-const MODEL = 'gemini-2.5-flash-lite' // free-tier friendly; model names change, check AI Studio
+const MODEL = 'gemini-3.5-flash-lite' // free-tier friendly; model names change, check AI Studio
 
 const INSTRUCTIONS = `You decode customer messages for an electronics components shop.
 Extract every component the customer wants and its quantity.
