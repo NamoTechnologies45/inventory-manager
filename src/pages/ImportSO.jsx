@@ -1,11 +1,14 @@
 import { useState } from 'react'
 import * as XLSX from 'xlsx'
 import { supabase } from '../lib/supabase'
+import { parseExcelWithGemini } from '../lib/gemini'
 
 export default function ImportSO() {
-  const [rows, setRows] = useState([])
+  const [rawData, setRawData] = useState([])
+  const [parsed, setParsed] = useState([])
   const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadingMsg, setLoadingMsg] = useState('')
 
   function handleFile(e) {
     const file = e.target.files[0]
@@ -15,31 +18,48 @@ export default function ImportSO() {
     reader.onload = (evt) => {
       const workbook = XLSX.read(evt.target.result, { type: 'binary' })
       const sheet = workbook.Sheets[workbook.SheetNames[0]]
-      const data = XLSX.utils.sheet_to_json(sheet)
-      setRows(data)
+      const data = XLSX.utils.sheet_to_json(sheet, { defval: '' })
+      setRawData(data)
+      setParsed([])
       setStatus(null)
     }
     reader.readAsBinaryString(file)
   }
 
-  async function handleImport() {
-    if (rows.length === 0) return
+  async function handleAnalyse() {
+    if (rawData.length === 0) return
     setLoading(true)
-    setStatus(null)
+    setLoadingMsg('Fetching existing inventory...')
+
+    try {
+      const { data: existingInventory } = await supabase
+        .from('inventory')
+        .select('part_code, part_name')
+
+      setLoadingMsg('AI is reading your Excel...')
+      const result = await parseExcelWithGemini(rawData, existingInventory || [])
+      setParsed(result)
+    } catch (err) {
+      alert('Error analysing file: ' + err.message)
+    }
+
+    setLoading(false)
+    setLoadingMsg('')
+  }
+
+  async function handleImport() {
+    if (parsed.length === 0) return
+    setLoading(true)
+    setLoadingMsg('Processing sell order...')
 
     let success = 0
     let errors = []
 
-    for (const row of rows) {
-      const part_code = row['Part_Code']?.toString().trim()
-      const quantity = parseInt(row['Quantity'])
-      const unit_price = parseFloat(row['Unit_Price'])
-      const so_number = row['SO_Number']?.toString().trim()
-      const customer = row['Customer']?.toString().trim()
-      const date = row['Date']?.toString().trim()
+    for (const item of parsed) {
+      const { part_code, part_name, quantity, selling_price } = item
 
-      if (!part_code || isNaN(quantity) || isNaN(unit_price)) {
-        errors.push(`Skipped row — missing data: ${part_code || 'unknown'}`)
+      if (!part_code || !part_name || !quantity) {
+        errors.push(`Skipped: ${part_name || 'unknown'}`)
         continue
       }
 
@@ -52,12 +72,12 @@ export default function ImportSO() {
       const existing = existingArr && existingArr.length > 0 ? existingArr[0] : null
 
       if (!existing) {
-        errors.push(`Part not found in inventory: ${part_code}`)
+        errors.push(`Part not found in inventory: ${part_name}`)
         continue
       }
 
       if (existing.quantity < quantity) {
-        errors.push(`Insufficient stock for ${part_code} — available: ${existing.quantity}, requested: ${quantity}`)
+        errors.push(`Insufficient stock for ${part_name} — available: ${existing.quantity}, requested: ${quantity}`)
         continue
       }
 
@@ -72,12 +92,12 @@ export default function ImportSO() {
 
       // Log sell order
       await supabase.from('sell_orders').insert({
-        so_number,
-        date,
-        customer,
+        so_number: 'AI-IMPORT',
+        date: new Date().toISOString().split('T')[0],
+        customer: 'Unknown',
         part_code,
         quantity,
-        unit_price
+        unit_price: selling_price
       })
 
       success++
@@ -85,22 +105,20 @@ export default function ImportSO() {
 
     setStatus({ success, errors })
     setLoading(false)
+    setLoadingMsg('')
   }
 
   return (
     <div>
       <h1 className="text-2xl font-bold mb-2 text-gray-800">Import Sell Order</h1>
       <p className="text-gray-500 text-sm mb-6">
-        Upload your sell order Excel. Stock will be deducted from inventory automatically.
+        Upload any Excel format — AI will read and structure it automatically.
       </p>
 
-      {/* Excel format reminder */}
       <div className="bg-green-50 border border-green-200 rounded p-4 mb-6 text-sm text-green-800">
-        <strong>Required Excel columns:</strong><br />
-        SO_Number | Date | Customer | Part_Code | Quantity | Unit_Price
+        ✨ <strong>No fixed format needed</strong> — just upload your Excel as-is. AI handles the rest.
       </div>
 
-      {/* File upload */}
       <input
         type="file"
         accept=".xlsx,.xls"
@@ -108,50 +126,84 @@ export default function ImportSO() {
         className="mb-4 block"
       />
 
-      {/* Preview */}
-      {rows.length > 0 && (
+      {rawData.length > 0 && parsed.length === 0 && (
+        <div className="mb-4">
+          <p className="text-sm text-gray-600 mb-3">{rawData.length} raw rows detected</p>
+          <button
+            onClick={handleAnalyse}
+            disabled={loading}
+            className="bg-purple-600 text-white px-6 py-2 rounded hover:bg-purple-700 disabled:opacity-50"
+          >
+            {loading ? loadingMsg : '✨ Analyse with AI'}
+          </button>
+        </div>
+      )}
+
+      {parsed.length > 0 && (
         <div className="mb-6">
-          <p className="text-sm text-gray-600 mb-2">{rows.length} rows detected — preview:</p>
-          <div className="overflow-x-auto">
+          <p className="text-sm text-gray-600 mb-3">
+            AI found <strong>{parsed.length} parts</strong> — review before processing:
+          </p>
+          <div className="overflow-x-auto mb-4">
             <table className="w-full text-xs bg-white shadow rounded overflow-hidden">
-              <thead className="bg-gray-200">
+              <thead className="bg-green-600 text-white">
                 <tr>
-                  {Object.keys(rows[0]).map(k => (
-                    <th key={k} className="px-3 py-2 text-left">{k}</th>
-                  ))}
+                  <th className="px-3 py-2 text-left">Part Code</th>
+                  <th className="px-3 py-2 text-left">Part Name</th>
+                  <th className="px-3 py-2 text-left">Category</th>
+                  <th className="px-3 py-2 text-right">Qty</th>
+                  <th className="px-3 py-2 text-right">Selling (₹)</th>
+                  <th className="px-3 py-2 text-center">Status</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.slice(0, 5).map((row, i) => (
-                  <tr key={i} className="border-t">
-                    {Object.values(row).map((v, j) => (
-                      <td key={j} className="px-3 py-2">{v}</td>
-                    ))}
+                {parsed.map((item, i) => (
+                  <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                    <td className="px-3 py-2 font-mono text-blue-600">{item.part_code}</td>
+                    <td className="px-3 py-2">{item.part_name}</td>
+                    <td className="px-3 py-2 text-gray-500">{item.category}</td>
+                    <td className="px-3 py-2 text-right">{item.quantity}</td>
+                    <td className="px-3 py-2 text-right">₹{item.selling_price}</td>
+                    <td className="px-3 py-2 text-center">
+                      {item.is_existing
+                        ? <span className="bg-blue-100 text-blue-600 px-2 py-1 rounded text-xs font-semibold">In Inventory</span>
+                        : <span className="bg-red-100 text-red-600 px-2 py-1 rounded text-xs font-semibold">Not Found</span>
+                      }
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          {rows.length > 5 && <p className="text-xs text-gray-400 mt-1">...and {rows.length - 5} more rows</p>}
 
-          <button
-            onClick={handleImport}
-            disabled={loading}
-            className="mt-4 bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 disabled:opacity-50"
-          >
-            {loading ? 'Processing...' : 'Import Sell Order'}
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={handleImport}
+              disabled={loading}
+              className="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700 disabled:opacity-50"
+            >
+              {loading ? loadingMsg : 'Process Sell Order'}
+            </button>
+            <button
+              onClick={() => { setParsed([]); setRawData([]) }}
+              disabled={loading}
+              className="bg-gray-400 text-white px-6 py-2 rounded hover:bg-gray-500 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Result */}
       {status && (
         <div className="mt-4">
           <div className="bg-green-100 text-green-700 px-4 py-3 rounded mb-2">
             ✅ {status.success} parts processed successfully
           </div>
           {status.errors.map((e, i) => (
-            <div key={i} className="bg-red-100 text-red-600 px-4 py-2 rounded text-sm mb-1">⚠️ {e}</div>
+            <div key={i} className="bg-red-100 text-red-600 px-4 py-2 rounded text-sm mb-1">
+              ⚠️ {e}
+            </div>
           ))}
         </div>
       )}

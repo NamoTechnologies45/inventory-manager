@@ -1,277 +1,314 @@
 import { useState } from 'react'
+import { supabase } from '../lib/supabase'
+import { parseOrderWithGemini } from '../lib/gemini'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-import { supabase } from '../lib/supabase'
-
-const MARKUP = 1.2 // used only when selling_price is 0: unit_cost + 20%
-
-// ---------- Parser: turns pasted text into [{ query, qty }] ----------
-function parseOrder(text) {
-  return text
-    .split(/[\n,;]+/)
-    .map(s => s.trim())
-    .filter(Boolean)
-    .map(line => {
-      let m
-      // "BC547 x50", "10k resistor x 100", "LM358 - 20"
-      if ((m = line.match(/^(.+?)\s*(?:[x×*:]|\s-\s)\s*(\d+)\s*(?:pcs|nos|pc)?$/i)))
-        return { query: m[1].trim(), qty: parseInt(m[2]) }
-      // "50 BC547", "50 pcs 7805", "50x 7805"
-      if ((m = line.match(/^(\d+)\s*(?:x|×|pcs|pc|nos)?\s+(.+)$/i)))
-        return { query: m[2].trim(), qty: parseInt(m[1]) }
-      // "BC547 50"
-      if ((m = line.match(/^(.+?)\s+(\d+)\s*(?:pcs|nos|pc)?$/i)))
-        return { query: m[1].trim(), qty: parseInt(m[2]) }
-      // no quantity given
-      return { query: line, qty: 1 }
-    })
-}
-
-const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '')
-
-// ---------- Matcher: finds the best inventory item ----------
-function findPart(query, inventory) {
-  const q = norm(query)
-  if (!q) return null
-
-  // 1. exact part code
-  let hit = inventory.find(p => norm(p.part_code) === q)
-  if (hit) return { part: hit, approx: false }
-
-  // 2. partial match on code or name
-  hit = inventory.find(p => {
-    const code = norm(p.part_code)
-    const name = norm(p.part_name)
-    return (
-      (code && (code.includes(q) || q.includes(code))) ||
-      (name && name.includes(q))
-    )
-  })
-  if (hit) return { part: hit, approx: true }
-
-  return null
-}
 
 export default function Quotation() {
-  const [text, setText] = useState('')
-  const [customer, setCustomer] = useState('')
-  const [result, setResult] = useState(null)
+  const [input, setInput] = useState('')
+  const [customerName, setCustomerName] = useState('')
+  const [available, setAvailable] = useState([])
+  const [unavailable, setUnavailable] = useState([])
+  const [alternatives, setAlternatives] = useState([])
+  const [searched, setSearched] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [loadingMsg, setLoadingMsg] = useState('')
 
-  async function generate() {
+  async function handleSearch() {
+    if (!input.trim()) return
     setLoading(true)
-    const { data: inventory, error } = await supabase.from('inventory').select('*')
-    setLoading(false)
-    if (error) return alert('Could not load inventory: ' + error.message)
-let items
-try {
-  const r = await fetch('/api/parse-order', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
-  })
-  if (!r.ok) throw new Error('AI failed')
-  items = (await r.json()).items
-} catch {
-  items = parseOrder(text) // falls back to your regex parser
-}
-    const available = []
-    const partial = []
-    const unavailable = []
+    setSearched(false)
+    setAvailable([])
+    setUnavailable([])
+    setAlternatives([])
 
-    for (const { query, qty } of items) {
-      const match = findPart(query, inventory)
-      if (!match) {
-        unavailable.push({ query, qty, reason: 'Not in inventory' })
-        continue
+    try {
+      setLoadingMsg('Fetching inventory...')
+      const { data: inventory } = await supabase.from('inventory').select('*')
+
+      setLoadingMsg('Analysing your order with AI...')
+      const parsed = await parseOrderWithGemini(input, inventory)
+
+      const availableList = []
+      const unavailableList = []
+      const alternativeList = []
+
+      for (const item of parsed) {
+        // Find matched item in inventory
+        const matched = item.matched_part_code
+          ? inventory.find(i => i.part_code === item.matched_part_code)
+          : null
+
+        if (matched) {
+          if (matched.quantity >= item.quantity) {
+            availableList.push({
+              part_code: matched.part_code,
+              part_name: matched.part_name,
+              qty: item.quantity,
+              unit_price: matched.selling_price,
+              total: item.quantity * matched.selling_price
+            })
+          } else {
+            unavailableList.push({
+              name: item.cleaned,
+              qty: item.quantity,
+              reason: `Only ${matched.quantity} in stock (need ${item.quantity})`
+            })
+
+            // Check alternative
+            if (item.alternative_part_code) {
+              const alt = inventory.find(i => i.part_code === item.alternative_part_code)
+              if (alt && alt.quantity >= item.quantity) {
+                alternativeList.push({
+                  requested: item.cleaned,
+                  qty: item.quantity,
+                  alt_part_code: alt.part_code,
+                  alt_part_name: alt.part_name,
+                  alt_qty: alt.quantity,
+                  reason: item.alternative_reason
+                })
+              }
+            }
+          }
+        } else {
+          unavailableList.push({
+            name: item.cleaned || item.original,
+            qty: item.quantity,
+            reason: 'Not found in inventory'
+          })
+
+          // Check alternative
+          if (item.alternative_part_code) {
+            const alt = inventory.find(i => i.part_code === item.alternative_part_code)
+            if (alt) {
+              alternativeList.push({
+                requested: item.cleaned || item.original,
+                qty: item.quantity,
+                alt_part_code: alt.part_code,
+                alt_part_name: alt.part_name,
+                alt_qty: alt.quantity,
+                reason: item.alternative_reason
+              })
+            }
+          }
+        }
       }
 
-      const { part, approx } = match
-      const sell = Number(part.selling_price) || 0
-      const cost = Number(part.unit_cost) || 0
-      const price = sell > 0 ? sell : cost * MARKUP
-      const priceIsEstimate = sell === 0 && cost > 0
-
-      if (part.quantity >= qty) {
-        available.push({ ...part, query, qty, price, approx, priceIsEstimate, total: price * qty })
-      } else if (part.quantity > 0) {
-        partial.push({
-          ...part, query, qty, price, approx, priceIsEstimate,
-          availableQty: part.quantity,
-          shortBy: qty - part.quantity,
-          total: price * part.quantity,
-        })
-      } else {
-        unavailable.push({
-          query, qty,
-          reason: `Out of stock (${part.part_code})`,
-          estPrice: price,
-          estTotal: price * qty,
-        })
-      }
+      setAvailable(availableList)
+      setUnavailable(unavailableList)
+      setAlternatives(alternativeList)
+      setSearched(true)
+    } catch (err) {
+      console.error(err)
+      alert('Error: ' + err.message)
     }
 
-    const grandTotal =
-      available.reduce((s, i) => s + i.total, 0) +
-      partial.reduce((s, i) => s + i.total, 0)
-
-    setResult({ available, partial, unavailable, grandTotal })
+    setLoading(false)
+    setLoadingMsg('')
   }
 
-  function downloadPDF() {
+  function exportPDF() {
     const doc = new jsPDF()
     const date = new Date().toLocaleDateString('en-IN')
+    const quoteNo = 'Q-' + Date.now().toString().slice(-6)
 
-    doc.setFontSize(18)
-    doc.text('QUOTATION', 14, 18)
+    doc.setFontSize(16)
+    doc.text('Ganesh Electronics', 14, 20)
     doc.setFontSize(10)
-    doc.text(`Date: ${date}`, 14, 26)
-    if (customer) doc.text(`Customer: ${customer}`, 14, 32)
+    doc.text(`Quotation No: ${quoteNo}`, 14, 30)
+    doc.text(`Date: ${date}`, 14, 36)
+    if (customerName) doc.text(`Customer: ${customerName}`, 14, 42)
 
-    const rows = [
-      ...result.available.map(i => [
-        i.part_code, i.qty, i.price.toFixed(2), i.total.toFixed(2), 'In stock',
-      ]),
-      ...result.partial.map(i => [
-        i.part_code, i.availableQty, i.price.toFixed(2), i.total.toFixed(2),
-        `Only ${i.availableQty} of ${i.qty} available`,
-      ]),
-    ]
+    let startY = customerName ? 50 : 44
 
-    autoTable(doc, {
-      startY: 38,
-      head: [['Part', 'Qty', 'Unit Price (Rs)', 'Total (Rs)', 'Status']],
-      body: rows,
-      foot: [['', '', 'Grand Total', result.grandTotal.toFixed(2), '']],
-      headStyles: { fillColor: [37, 99, 235] },
-      footStyles: { fillColor: [229, 231, 235], textColor: 20 },
-    })
-
-    if (result.unavailable.length > 0) {
+    if (available.length > 0) {
+      doc.setFontSize(12)
+      doc.text('Available Parts', 14, startY)
       autoTable(doc, {
-        startY: doc.lastAutoTable.finalY + 10,
-        head: [['Not in stock', 'Qty', 'Approx price (Rs)', 'Note']],
-        body: result.unavailable.map(i => [
-          i.query,
-          i.qty,
-          i.estPrice ? `${i.estPrice.toFixed(2)} each` : '-',
-          i.reason,
-        ]),
-        headStyles: { fillColor: [220, 38, 38] },
+        startY: startY + 4,
+        head: [['Part Code', 'Part Name', 'Qty', 'Unit Price (₹)', 'Total (₹)']],
+        body: available.map(i => [i.part_code, i.part_name, i.qty, `₹${i.unit_price}`, `₹${i.total}`]),
+        foot: [['', '', '', 'Grand Total', `₹${available.reduce((s, i) => s + i.total, 0)}`]],
+        theme: 'striped',
+        headStyles: { fillColor: [29, 78, 216] },
+        footStyles: { fillColor: [220, 252, 231], textColor: [0, 0, 0], fontStyle: 'bold' }
+      })
+      startY = doc.lastAutoTable.finalY + 10
+    }
+
+    if (alternatives.length > 0) {
+      doc.setFontSize(12)
+      doc.text('Alternative Suggestions', 14, startY)
+      autoTable(doc, {
+        startY: startY + 4,
+        head: [['Requested', 'Suggested Alternative', 'Available Qty', 'Reason']],
+        body: alternatives.map(i => [i.requested, i.alt_part_name, i.alt_qty, i.reason]),
+        theme: 'striped',
+        headStyles: { fillColor: [161, 98, 7] }
+      })
+      startY = doc.lastAutoTable.finalY + 10
+    }
+
+    if (unavailable.length > 0) {
+      doc.setFontSize(12)
+      doc.text('Unavailable Parts', 14, startY)
+      autoTable(doc, {
+        startY: startY + 4,
+        head: [['Requested', 'Qty', 'Reason']],
+        body: unavailable.map(i => [i.name, i.qty, i.reason]),
+        theme: 'striped',
+        headStyles: { fillColor: [185, 28, 28] }
       })
     }
 
-    doc.save(`quotation_${customer || 'customer'}_${Date.now()}.pdf`)
+    doc.save(`Quotation_${quoteNo}.pdf`)
   }
+
+  const grandTotal = available.reduce((s, i) => s + i.total, 0)
 
   return (
     <div>
-      <h1 className="text-2xl font-bold mb-2 text-gray-800">Generate Quotation</h1>
+      <h1 className="text-2xl font-bold mb-2 text-gray-800">Quotation Generator</h1>
       <p className="text-gray-500 text-sm mb-6">
-        Paste the customer's message. Example: <code>BC547 x50, 10k resistor x100, 7805 x10</code>
+        Type naturally — AI will understand abbreviations, spelling mistakes and suggest alternatives.
       </p>
 
+      <div className="bg-blue-50 border border-blue-200 rounded p-4 mb-6 text-sm text-blue-800">
+        <strong>Format:</strong> One item per line — PartName x Quantity<br />
+        <span className="font-mono">
+          bc547 x 50<br />
+          lm 358 x 10<br />
+          10k res x 100<br />
+          100uf 25v cap x 20<br />
+          m2f jumpr wire x 10
+        </span>
+      </div>
+
       <input
-        value={customer}
-        onChange={e => setCustomer(e.target.value)}
+        type="text"
         placeholder="Customer name (optional)"
-        className="border rounded px-3 py-2 mb-3 w-full max-w-md block"
+        value={customerName}
+        onChange={e => setCustomerName(e.target.value)}
+        className="w-full md:w-1/2 border border-gray-300 rounded px-4 py-2 mb-3 focus:outline-none focus:ring-2 focus:ring-blue-400"
       />
 
       <textarea
-        value={text}
-        onChange={e => setText(e.target.value)}
-        rows={6}
-        placeholder={'BC547 x50\nLM358 20\n100 10KRES'}
-        className="border rounded px-3 py-2 w-full max-w-2xl block mb-3"
+        rows={8}
+        placeholder={"bc547 x 50\nlm358 x 10\n10k res x 100"}
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        className="w-full border border-gray-300 rounded px-4 py-2 mb-4 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
       />
 
       <button
-        onClick={generate}
-        disabled={!text.trim() || loading}
-        className="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 disabled:opacity-50"
+        onClick={handleSearch}
+        disabled={loading}
+        className="bg-blue-700 text-white px-6 py-2 rounded hover:bg-blue-800 disabled:opacity-50 mr-3"
       >
-        {loading ? 'Checking stock...' : 'Generate Quotation'}
+        {loading ? loadingMsg : 'Generate Quotation'}
       </button>
 
-      {result && (
-        <div className="mt-8 space-y-6">
-          {result.available.length > 0 && (
-            <Section title="✅ Available" color="green">
-              {result.available.map((i, k) => (
-                <Row
-                  key={k}
-                  left={`${i.part_code}${i.approx ? ` (approx match for "${i.query}")` : ''}`}
-                  right={`${i.qty} × ₹${i.price.toFixed(2)}${i.priceIsEstimate ? ' (est.)' : ''} = ₹${i.total.toFixed(2)}`}
-                />
-              ))}
-            </Section>
+      {searched && (
+        <button
+          onClick={exportPDF}
+          className="bg-green-600 text-white px-6 py-2 rounded hover:bg-green-700"
+        >
+          Export PDF
+        </button>
+      )}
+
+      {searched && (
+        <div className="mt-6 space-y-6">
+
+          {/* Available */}
+          {available.length > 0 && (
+            <div>
+              <h2 className="text-lg font-semibold text-green-700 mb-2">✅ Available Parts</h2>
+              <table className="w-full bg-white shadow rounded overflow-hidden text-sm">
+                <thead className="bg-green-600 text-white">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Part Code</th>
+                    <th className="px-4 py-2 text-left">Part Name</th>
+                    <th className="px-4 py-2 text-right">Qty</th>
+                    <th className="px-4 py-2 text-right">Unit Price</th>
+                    <th className="px-4 py-2 text-right">Total</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {available.map((item, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-4 py-2 font-mono text-blue-600">{item.part_code}</td>
+                      <td className="px-4 py-2">{item.part_name}</td>
+                      <td className="px-4 py-2 text-right">{item.qty}</td>
+                      <td className="px-4 py-2 text-right">₹{item.unit_price}</td>
+                      <td className="px-4 py-2 text-right font-semibold">₹{item.total}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-green-50">
+                  <tr>
+                    <td colSpan={4} className="px-4 py-2 text-right font-bold">Grand Total</td>
+                    <td className="px-4 py-2 text-right font-bold text-green-700">₹{grandTotal}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           )}
 
-          {result.partial.length > 0 && (
-            <Section title="⚠️ Partially available" color="yellow">
-              {result.partial.map((i, k) => (
-                <Row
-                  key={k}
-                  left={`${i.part_code} — wanted ${i.qty}, only ${i.availableQty} in stock`}
-                  right={`${i.availableQty} × ₹${i.price.toFixed(2)}${i.priceIsEstimate ? ' (est.)' : ''} = ₹${i.total.toFixed(2)}`}
-                />
-              ))}
-            </Section>
+          {/* Alternatives */}
+          {alternatives.length > 0 && (
+            <div>
+              <h2 className="text-lg font-semibold text-yellow-600 mb-2">💡 Alternative Suggestions</h2>
+              <table className="w-full bg-white shadow rounded overflow-hidden text-sm">
+                <thead className="bg-yellow-500 text-white">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Requested</th>
+                    <th className="px-4 py-2 text-left">Suggested</th>
+                    <th className="px-4 py-2 text-right">Available Qty</th>
+                    <th className="px-4 py-2 text-left">Why it works</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {alternatives.map((item, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-4 py-2 text-red-500">{item.requested}</td>
+                      <td className="px-4 py-2 font-semibold">{item.alt_part_name}</td>
+                      <td className="px-4 py-2 text-right">{item.alt_qty}</td>
+                      <td className="px-4 py-2 text-gray-500 text-xs">{item.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
-          {result.unavailable.length > 0 && (
-            <Section title="❌ Not available" color="red">
-              {result.unavailable.map((i, k) => (
-                <Row
-                  key={k}
-                  left={`${i.query} × ${i.qty}`}
-                  right={
-                    i.estPrice
-                      ? `${i.reason} — approx ₹${i.estPrice.toFixed(2)} each (₹${i.estTotal.toFixed(2)})`
-                      : i.reason
-                  }
-                />
-              ))}
-            </Section>
+          {/* Unavailable */}
+          {unavailable.length > 0 && (
+            <div>
+              <h2 className="text-lg font-semibold text-red-600 mb-2">❌ Unavailable Parts</h2>
+              <table className="w-full bg-white shadow rounded overflow-hidden text-sm">
+                <thead className="bg-red-600 text-white">
+                  <tr>
+                    <th className="px-4 py-2 text-left">Requested</th>
+                    <th className="px-4 py-2 text-right">Qty</th>
+                    <th className="px-4 py-2 text-left">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unavailable.map((item, i) => (
+                    <tr key={i} className={i % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                      <td className="px-4 py-2">{item.name}</td>
+                      <td className="px-4 py-2 text-right">{item.qty}</td>
+                      <td className="px-4 py-2 text-red-500">{item.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
 
-          <div className="text-xl font-bold text-gray-800">
-            Grand Total: ₹{result.grandTotal.toFixed(2)}
-          </div>
-
-          <button
-            onClick={downloadPDF}
-            className="bg-gray-800 text-white px-6 py-2 rounded hover:bg-gray-900"
-          >
-            📄 Download PDF
-          </button>
         </div>
       )}
-    </div>
-  )
-}
-
-const colors = {
-  green: 'bg-green-50 border-green-200',
-  yellow: 'bg-yellow-50 border-yellow-200',
-  red: 'bg-red-50 border-red-200',
-}
-
-function Section({ title, color, children }) {
-  return (
-    <div className={`border rounded p-4 ${colors[color]}`}>
-      <h2 className="font-semibold mb-2">{title}</h2>
-      {children}
-    </div>
-  )
-}
-
-function Row({ left, right }) {
-  return (
-    <div className="flex justify-between text-sm py-1 border-t first:border-t-0 gap-4">
-      <span>{left}</span>
-      <span className="text-gray-600 text-right">{right}</span>
     </div>
   )
 }
