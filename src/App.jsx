@@ -1,33 +1,83 @@
+import { useState } from 'react'
 import { BrowserRouter, Routes, Route, NavLink } from 'react-router-dom'
 import Dashboard from './pages/Dashboard'
 import Inventory from './pages/Inventory'
 import ImportPO from './pages/ImportPO'
-import ImportSO from './pages/ImportSO'
 import Quotation from './pages/Quotation'
+import SellOrders from './pages/SellOrders'
+import Customers from './pages/Customers'
+import Expenses from './pages/Expenses'
 
 export default function App() {
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  const links = [
+    { to: '/', label: '🏠 Dashboard' },
+    { to: '/inventory', label: '📦 Inventory' },
+    { to: '/import-po', label: '🛒 Purchase Order' },
+    { to: '/quotation', label: '📋 Quotation' },
+    { to: '/sell-orders', label: '🧾 Sell Orders' },
+    { to: '/customers', label: '👥 Customers' },
+    { to: '/expenses', label: '💸 Expenses' },
+  ]
+
   return (
     <BrowserRouter>
       <div className="min-h-screen bg-gray-100">
-        
-        {/* Navbar */}
-        <nav className="bg-blue-700 text-white px-6 py-4 flex gap-6 items-center">
-          <span className="font-bold text-lg mr-4">⚡ Ganesh Electronics</span>
-          <NavLink to="/" className={({isActive}) => isActive ? "underline font-semibold" : "hover:underline"}>Dashboard</NavLink>
-          <NavLink to="/inventory" className={({isActive}) => isActive ? "underline font-semibold" : "hover:underline"}>Inventory</NavLink>
-          <NavLink to="/import-po" className={({isActive}) => isActive ? "underline font-semibold" : "hover:underline"}>Purchase Order</NavLink>
-          <NavLink to="/import-so" className={({isActive}) => isActive ? "underline font-semibold" : "hover:underline"}>Sell Order</NavLink>
-          <NavLink to="/quotation" className={({isActive}) => isActive ? "underline font-semibold" : "hover:underline"}>Quotation</NavLink>
+
+        <nav className="bg-blue-700 text-white px-4 py-3">
+          <div className="flex justify-between items-center">
+            <span className="font-bold text-base">⚡ Ganesh Electronics</span>
+            <button
+              className="md:hidden text-white text-2xl"
+              onClick={() => setMenuOpen(!menuOpen)}
+            >
+              {menuOpen ? '✕' : '☰'}
+            </button>
+            <div className="hidden md:flex gap-4 text-sm">
+              {links.map(l => (
+                <NavLink
+                  key={l.to}
+                  to={l.to}
+                  end={l.to === '/'}
+                  className={({ isActive }) =>
+                    isActive ? 'underline font-semibold' : 'hover:underline'
+                  }
+                >
+                  {l.label}
+                </NavLink>
+              ))}
+            </div>
+          </div>
+
+          {menuOpen && (
+            <div className="md:hidden mt-3 flex flex-col gap-3 text-sm pb-2">
+              {links.map(l => (
+                <NavLink
+                  key={l.to}
+                  to={l.to}
+                  end={l.to === '/'}
+                  onClick={() => setMenuOpen(false)}
+                  className={({ isActive }) =>
+                    isActive ? 'underline font-semibold' : 'hover:underline'
+                  }
+                >
+                  {l.label}
+                </NavLink>
+              ))}
+            </div>
+          )}
         </nav>
 
-        {/* Pages */}
-        <div className="p-6">
+        <div className="p-4">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/import-po" element={<ImportPO />} />
-            <Route path="/import-so" element={<ImportSO />} />
             <Route path="/quotation" element={<Quotation />} />
+            <Route path="/sell-orders" element={<SellOrders />} />
+            <Route path="/customers" element={<Customers />} />
+            <Route path="/expenses" element={<Expenses />} />
           </Routes>
         </div>
 
