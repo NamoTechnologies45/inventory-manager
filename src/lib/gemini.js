@@ -168,89 +168,57 @@ no Markdown, no backticks:
 // 5. PARSE PURCHASE ORDER EXCEL DATA
 // --------------------------------------------------
 
-export async function parseExcelWithGemini(
-  rawData,
-  existingInventory = []
-) {
-  const inventoryList = existingInventory
-    .map((i) => `${i.part_code} | ${i.part_name}`)
-    .join('\n')
+export async function parseExcelWithGemini(rawData, existingInventory = []) {
+  const model = genAI.getGenerativeModel({ model: 'gemini-3.8-flash' })
+
+  const inventoryList = existingInventory.map(i =>
+    `${i.part_code} | ${i.part_name}`
+  ).join('\n')
 
   const prompt = `
-You are an electronics inventory assistant responsible
-for maintaining consistent part naming.
+You are an electronics inventory assistant responsible for maintaining consistent part naming.
 
-EXISTING INVENTORY:
-You MUST reuse the exact part_code and part_name if the
-part matches an existing inventory item.
-
+EXISTING INVENTORY (you MUST reuse these exact part_code and part_name if the part matches):
 ${inventoryList || 'No existing inventory yet'}
 
-NEW PURCHASE ORDER EXCEL DATA:
+NEW PURCHASE ORDER Excel data to parse:
 ${JSON.stringify(rawData)}
 
 RULES:
+1. If a part already exists in inventory (same component + same spec), use the EXACT same part_code and part_name — do not change even one character
+2. If a row has no component name but has a specification, it belongs to the previous component — combine as "ComponentName - Specification"
+3. For NEW parts not in inventory, generate a clean consistent part_code like "ESP32-30PIN", "BURGSTRIP-MALE", "SERVO-MG996R" — uppercase, no spaces, use hyphen
+4. For NEW parts, part_name should be full descriptive name like "ESP32 Development Board 30Pin"
+5. Skip total rows and empty rows
+6. Every part with different specification is a UNIQUE part
+7. Extract quantity, unit_cost (cost price), selling_price
+8. Separately detect any extra charges like packing, delivery, transport, shipping, handling — these are NOT inventory items
 
-1. If a part already exists in inventory with the same
-   component and same specifications, use the EXACT same
-   part_code and part_name. Do not change any characters.
-
-2. If a row has no component name but has a specification,
-   it belongs to the previous component. Combine them as
-   "ComponentName - Specification".
-
-3. For NEW parts not in inventory, generate a clean,
-   consistent part_code, such as:
-   "ESP32-30PIN", "BURGSTRIP-MALE", "SERVO-MG996R".
-   Use uppercase letters, no spaces, and hyphens.
-
-4. For NEW parts, part_name should be a full descriptive
-   name, such as "ESP32 Development Board 30Pin".
-
-5. Skip total rows, packing rows, transport rows,
-   empty rows, and other non-product rows.
-
-6. Every part with different specifications is a UNIQUE
-   part. ESP32 30-pin and ESP32 38-pin are different parts.
-
-7. Extract quantity, unit_cost (purchase cost), and
-   selling_price.
-
-8. Do not merge components just because their names look
-   similar. Preserve voltage, capacitance, resistance,
-   current rating, pin count, connector type, dimensions,
-   and other meaningful specifications.
-
-9. Reuse existing part codes only when the component and
-   its relevant specifications match.
-
-10. If a field is missing from the source, do not invent
-    a factual price or quantity. Use 0 for missing numeric
-    values if the source provides no value.
-
-11. Set is_existing to true only when the item matches an
-    existing inventory item. Otherwise, set it to false.
-
-12. Quantity, unit_cost, and selling_price must be numbers,
-    not strings. Use decimal numbers for prices.
-
-13. Return one object per valid product line item.
-
-Respond ONLY with a valid JSON array, no explanation,
-no Markdown, no backticks:
-
-[
-  {
-    "part_code": "EXACT-CODE",
-    "part_name": "Full descriptive name",
-    "category": "IC/Sensor/Motor/Module/Cable/Connector etc",
-    "quantity": 10,
-    "unit_cost": 5.00,
-    "selling_price": 10.00,
-    "is_existing": true
-  }
-]
+Respond ONLY with valid JSON object, no explanation, no markdown, no backticks:
+{
+  "parts": [
+    {
+      "part_code": "EXACT-CODE",
+      "part_name": "Full descriptive name",
+      "category": "IC/Sensor/Motor/Module/Cable/Connector etc",
+      "quantity": 10,
+      "unit_cost": 5.00,
+      "selling_price": 10.00,
+      "is_existing": true or false
+    }
+  ],
+  "expenses": [
+    {
+      "description": "Packing charges",
+      "amount": 235,
+      "category": "Packaging"
+    }
+  ]
+}
 `
 
-  return await generateJson(prompt)
+  const result = await model.generateContent(prompt)
+  const text = result.response.text()
+  const clean = text.replace(/```json|```/g, '').trim()
+  return JSON.parse(clean)
 }

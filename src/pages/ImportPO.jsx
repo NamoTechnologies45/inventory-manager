@@ -9,6 +9,7 @@ import {
   partner,
   sendWhatsApp,
 } from "../lib/whatsapp";
+
 export default function ImportPO() {
   const [rawData, setRawData] = useState([]);
   const [parsed, setParsed] = useState([]);
@@ -17,6 +18,7 @@ export default function ImportPO() {
   const [loadingMsg, setLoadingMsg] = useState("");
   const [whatsappMsg, setWhatsappMsg] = useState("");
   const [lowStockMsg2, setLowStockMsg2] = useState("");
+  const [detectedExpenses, setDetectedExpenses] = useState([])
   function handleFile(e) {
     const file = e.target.files[0];
     if (!file) return;
@@ -33,108 +35,109 @@ export default function ImportPO() {
     reader.readAsBinaryString(file);
   }
 
-  async function handleAnalyse() {
-    if (rawData.length === 0) return;
-    setLoading(true);
-    setLoadingMsg("Fetching existing inventory...");
+async function handleAnalyse() {
+  if (rawData.length === 0) return
+  setLoading(true)
+  setLoadingMsg('Fetching existing inventory...')
 
-    try {
-      const { data: existingInventory } = await supabase
-        .from("inventory")
-        .select("part_code, part_name");
+  try {
+    const { data: existingInventory } = await supabase
+      .from('inventory')
+      .select('part_code, part_name')
 
-      setLoadingMsg("AI is reading your Excel...");
-      const result = await parseExcelWithGemini(
-        rawData,
-        existingInventory || [],
-      );
-      setParsed(result);
-    } catch (err) {
-      alert("Error analysing file: " + err.message);
-    }
-
-    setLoading(false);
-    setLoadingMsg("");
+    setLoadingMsg('AI is reading your Excel...')
+    const result = await parseExcelWithGemini(rawData, existingInventory || [])
+    setParsed(result.parts || [])
+    setDetectedExpenses(result.expenses || [])
+  } catch (err) {
+    alert('Error analysing file: ' + err.message)
   }
 
-  async function handleImport() {
-    if (parsed.length === 0) return;
+  setLoading(false)
+  setLoadingMsg('')
+}
 
-    setLoading(true);
-    setLoadingMsg("Importing to inventory...");
+async function handleImport() {
+  if (parsed.length === 0) return
+  setLoading(true)
+  setLoadingMsg('Importing to inventory...')
 
-    let success = 0;
-    let errors = [];
+  let success = 0
+  let errors = []
 
-    for (const item of parsed) {
-      const {
+  for (const item of parsed) {
+    const { part_code, part_name, category, quantity, unit_cost, selling_price } = item
+
+    if (!part_code || !part_name || !quantity) {
+      errors.push(`Skipped: ${part_name || 'unknown'}`)
+      continue
+    }
+
+    const { data: existingArr } = await supabase
+      .from('inventory')
+      .select('*')
+      .eq('part_code', part_code)
+
+    const existing = existingArr && existingArr.length > 0 ? existingArr[0] : null
+
+    if (existing) {
+      await supabase
+        .from('inventory')
+        .update({
+          quantity: existing.quantity + quantity,
+          unit_cost,
+          selling_price,
+          updated_at: new Date().toISOString()
+        })
+        .eq('part_code', part_code)
+    } else {
+      await supabase.from('inventory').insert({
         part_code,
         part_name,
         category,
         quantity,
         unit_cost,
         selling_price,
-      } = item;
-
-      if (!part_code || !part_name || !quantity) {
-        errors.push(`Skipped: ${part_name || "unknown"}`);
-        continue;
-      }
-
-      const { data: existingArr } = await supabase
-        .from("inventory")
-        .select("*")
-        .eq("part_code", part_code);
-
-      const existing =
-        existingArr && existingArr.length > 0 ? existingArr[0] : null;
-
-      if (existing) {
-        await supabase
-          .from("inventory")
-          .update({
-            quantity: existing.quantity + quantity,
-            unit_cost,
-            selling_price,
-            updated_at: new Date().toISOString(),
-          })
-          .eq("part_code", part_code);
-      } else {
-        await supabase.from("inventory").insert({
-          part_code,
-          part_name,
-          category,
-          quantity,
-          unit_cost,
-          selling_price,
-          low_stock_alert: 5,
-        });
-      }
-
-      await supabase.from("purchase_orders").insert({
-        po_number: "AI-IMPORT",
-        date: new Date().toISOString().split("T")[0],
-        supplier: "Unknown",
-        part_code,
-        quantity,
-        unit_cost,
-      });
-
-      success++;
+        low_stock_alert: 5
+      })
     }
 
-    setStatus({ success, errors });
-    // Check low stock after import
-    const { data: inventory } = await supabase.from("inventory").select("*");
-    const lowItems =
-      inventory?.filter((i) => i.quantity <= i.low_stock_alert) || [];
-    if (lowItems.length > 0) {
-      setLowStockMsg2(lowStockMsg(lowItems));
-    }
-    setWhatsappMsg(purchaseOrderMsg(success, "Imported"));
-    setLoading(false);
-    setLoadingMsg("");
+    await supabase.from('purchase_orders').insert({
+      po_number: 'AI-IMPORT',
+      date: new Date().toISOString().split('T')[0],
+      supplier: 'Unknown',
+      part_code,
+      quantity,
+      unit_cost
+    })
+
+    success++
   }
+
+  // Auto add detected expenses
+  if (detectedExpenses.length > 0) {
+    for (const exp of detectedExpenses) {
+      await supabase.from('expenses').insert({
+        date: new Date().toISOString().split('T')[0],
+        category: exp.category || 'Other',
+        description: exp.description,
+        amount: exp.amount,
+        paid_to: 'Supplier'
+      })
+    }
+  }
+
+  setStatus({ success, errors, expensesAdded: detectedExpenses.length })
+
+  const { data: inventory } = await supabase.from('inventory').select('*')
+  const lowItems = inventory?.filter(i => i.quantity <= i.low_stock_alert) || []
+  if (lowItems.length > 0) {
+    setLowStockMsg2(lowStockMsg(lowItems))
+  }
+  setWhatsappMsg(purchaseOrderMsg(success, 'Imported'))
+  setLoading(false)
+  setLoadingMsg('')
+}
 
   return (
     <div>
@@ -223,7 +226,19 @@ export default function ImportPO() {
               </tbody>
             </table>
           </div>
-
+   {detectedExpenses.length > 0 && (
+            <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded p-3">
+              <div className="text-xs font-semibold text-yellow-700 mb-2">
+                💸 Detected Expenses (will be auto added):
+              </div>
+              {detectedExpenses.map((exp, i) => (
+                <div key={i} className="flex justify-between text-sm py-1 border-b">
+                  <span>{exp.description}</span>
+                  <span className="font-semibold text-red-600">₹{exp.amount}</span>
+                </div>
+              ))}
+            </div>
+          )}
           <div className="flex gap-3">
             <button
               onClick={handleImport}
@@ -246,11 +261,17 @@ export default function ImportPO() {
         </div>
       )}
 
+
       {status && (
         <div className="mt-4">
           <div className="bg-green-100 text-green-700 px-4 py-3 rounded mb-2">
             ✅ {status.success} parts imported successfully
           </div>
+           {status.expensesAdded > 0 && (
+      <div className="bg-blue-100 text-blue-700 px-4 py-3 rounded mb-2">
+        💸 {status.expensesAdded} expense(s) auto added (packing/delivery)
+      </div>
+    )}
           {whatsappMsg && (
             <div className="mt-3 space-y-2">
               <div className="text-xs text-gray-500 font-semibold">
