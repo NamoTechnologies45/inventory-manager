@@ -46,6 +46,8 @@ export default function Quotation() {
   const [savedBillNo, setSavedBillNo] = useLocalState("q_savedBillNo", "");
   const [loading, setLoading] = useState(false);
   const [loadingMsg, setLoadingMsg] = useState("");
+  const [partial, setPartial] = useLocalState('q_partial', [])
+  const partialList = []
   const [whatsappMsg, setWhatsappMsg] = useLocalState("q_whatsappmsg", "");
 
   async function handleSearch() {
@@ -58,6 +60,8 @@ export default function Quotation() {
     setUnavailable([]);
     setAlternatives([]);
 
+    setPartial([])
+
     try {
       setLoadingMsg("Fetching inventory...");
       const { data: inventory } = await supabase.from("inventory").select("*");
@@ -67,6 +71,7 @@ export default function Quotation() {
 
       const availableList = [];
       const unavailableList = [];
+      
       const alternativeList = [];
 
       for (const item of parsed) {
@@ -75,20 +80,31 @@ export default function Quotation() {
           : null;
 
         if (matched) {
-          if (matched.quantity >= item.quantity) {
-            availableList.push({
-              part_code: matched.part_code,
-              part_name: matched.part_name,
-              qty: item.quantity,
-              unit_price: matched.selling_price,
-              total: item.quantity * matched.selling_price,
-            });
-          } else {
-            unavailableList.push({
-              name: item.cleaned,
-              qty: item.quantity,
-              reason: `Only ${matched.quantity} in stock`,
-            });
+       if (matched.quantity >= item.quantity) {
+  availableList.push({
+    part_code: matched.part_code,
+    part_name: matched.part_name,
+    qty: item.quantity,
+    unit_price: matched.selling_price,
+    total: item.quantity * matched.selling_price
+  })
+} else if (matched.quantity > 0) {
+  // Partial stock — let user decide
+  partialList.push({
+    part_code: matched.part_code,
+    part_name: matched.part_name,
+    requested_qty: item.quantity,
+    available_qty: matched.quantity,
+    unit_price: matched.selling_price,
+    total: matched.quantity * matched.selling_price,
+    included: true // default include available qty
+  })
+} else {
+  unavailableList.push({
+    name: item.cleaned,
+    qty: item.quantity,
+    reason: 'Out of stock'
+  })
             if (item.alternative_part_code) {
               const alt = inventory.find(
                 (i) => i.part_code === item.alternative_part_code,
@@ -132,6 +148,7 @@ export default function Quotation() {
       setAvailable(availableList);
       setUnavailable(unavailableList);
       setAlternatives(alternativeList);
+      setPartial(partialList)
       setSearched(true);
     } catch (err) {
       alert("Error: " + err.message);
@@ -141,14 +158,24 @@ export default function Quotation() {
     setLoadingMsg("");
   }
 
-  function handleConvertToBill() {
-    setBillItems(available.map((i) => ({ ...i })));
-    setExtras([{ label: "", amount: "" }]);
-    setDiscount(0);
-    setNotes("");
-    setShowBill(true);
-    setBillSaved(false);
-  }
+function handleConvertToBill() {
+  const acceptedPartial = partial
+    .filter(i => i.included)
+    .map(i => ({
+      part_code: i.part_code,
+      part_name: i.part_name,
+      qty: i.available_qty,
+      unit_price: i.unit_price,
+      total: i.total
+    }))
+
+  setBillItems([...available.map(i => ({ ...i })), ...acceptedPartial])
+  setExtras([{ label: '', amount: '' }])
+  setDiscount(0)
+  setNotes('')
+  setShowBill(true)
+  setBillSaved(false)
+}
 
   function updateBillItem(index, field, value) {
     const updated = [...billItems];
@@ -505,7 +532,60 @@ export default function Quotation() {
               </div>
             </div>
           )}
-
+{partial.length > 0 && (
+  <div>
+    <h2 className="text-sm font-semibold text-orange-600 mb-2">
+      ⚠️ Partial Stock ({partial.length})
+    </h2>
+    <div className="bg-white rounded shadow overflow-hidden">
+      {partial.map((item, i) => (
+        <div key={i} className="px-3 py-2 border-b text-sm">
+          <div className="flex justify-between items-start mb-1">
+            <div>
+              <div className="font-medium">{item.part_name}</div>
+              <div className="text-xs text-gray-400">
+                Requested: {item.requested_qty} | Available: {item.available_qty}
+              </div>
+            </div>
+            <div className="font-semibold text-orange-600">
+              ₹{item.total}
+            </div>
+          </div>
+          <div className="flex gap-2 mt-1">
+            <button
+              onClick={() => {
+                const updated = [...partial]
+                updated[i].included = true
+                setPartial(updated)
+              }}
+              className={`flex-1 py-1 rounded text-xs font-semibold ${
+                item.included
+                  ? 'bg-orange-500 text-white'
+                  : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              ✅ Take {item.available_qty} available
+            </button>
+            <button
+              onClick={() => {
+                const updated = [...partial]
+                updated[i].included = false
+                setPartial(updated)
+              }}
+              className={`flex-1 py-1 rounded text-xs font-semibold ${
+                !item.included
+                  ? 'bg-red-500 text-white'
+                  : 'bg-gray-100 text-gray-500'
+              }`}
+            >
+              ❌ Skip this part
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+)}
           {alternatives.length > 0 && (
             <div>
               <h2 className="text-sm font-semibold text-yellow-600 mb-2">
@@ -814,6 +894,7 @@ export default function Quotation() {
                   setAvailable([]);
                   setUnavailable([]);
                   setAlternatives([]);
+                  setPartial([])
                   setCustomerName("");
                   setCustomerPhone("");
                   setWhatsappMsg("");
