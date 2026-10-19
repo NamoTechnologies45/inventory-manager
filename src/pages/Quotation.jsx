@@ -578,7 +578,6 @@ function handleConvertToBill() {
       : 'bg-gray-100 text-gray-500'
   }`}
 >
-  ❌ Skip this part
 </button>
           </div>
         </div>
