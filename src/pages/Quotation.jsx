@@ -257,71 +257,77 @@ export default function Quotation() {
     setLoadingMsg('')
   }
 
-  function exportBillPDF() {
-    const doc = new jsPDF()
-    const date = new Date().toLocaleDateString('en-IN')
-    const billNo = savedBillNo || generateBillNumber()
+function generateBillPDFBlob() {
+  const doc = new jsPDF()
+  const date = new Date().toLocaleDateString('en-IN')
+  const billNo = savedBillNo || generateBillNumber()
 
-    doc.setFontSize(18)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Ganesh Electronics', 14, 18)
-    doc.setFontSize(9)
-    doc.setFont('helvetica', 'normal')
-    doc.text('Tax Invoice / Bill', 14, 25)
-    doc.line(14, 27, 196, 27)
+  doc.setFontSize(18)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Ganesh Electronics', 14, 18)
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'normal')
+  doc.text('Tax Invoice / Bill', 14, 25)
+  doc.line(14, 27, 196, 27)
 
-    doc.setFontSize(10)
-    doc.text(`Bill No: ${billNo}`, 14, 34)
-    doc.text(`Date: ${date}`, 140, 34)
-    doc.text(`Customer: ${customerName}`, 14, 41)
-    if (customerPhone) doc.text(`Phone: ${customerPhone}`, 14, 47)
+  doc.setFontSize(10)
+  doc.text(`Bill No: ${billNo}`, 14, 34)
+  doc.text(`Date: ${date}`, 140, 34)
+  doc.text(`Customer: ${customerName}`, 14, 41)
+  if (customerPhone) doc.text(`Phone: ${customerPhone}`, 14, 47)
 
-    let startY = customerPhone ? 54 : 48
+  let startY = customerPhone ? 54 : 48
 
-    autoTable(doc, {
-      startY,
-      head: [['#', 'Part Name', 'Qty', 'Unit Price', 'Total']],
-      body: billItems.map((i, idx) => [
-        idx + 1, i.part_name, i.qty, `Rs.${i.unit_price}`, `Rs.${i.total}`
-      ]),
-      theme: 'striped',
-      headStyles: { fillColor: [29, 78, 216] },
-      styles: { fontSize: 9 }
-    })
+  autoTable(doc, {
+    startY,
+    head: [['#', 'Part Name', 'Qty', 'Unit Price', 'Total']],
+    body: billItems.map((i, idx) => [
+      idx + 1, i.part_name, i.qty, `Rs.${i.unit_price}`, `Rs.${i.total}`
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [29, 78, 216] },
+    styles: { fontSize: 9 }
+  })
 
-    startY = doc.lastAutoTable.finalY + 6
+  startY = doc.lastAutoTable.finalY + 6
 
-    const totalsData = [['Subtotal', `Rs.${subtotal}`]]
-    extras.filter(e => e.label && e.amount).forEach(e => {
-      totalsData.push([e.label, `Rs.${e.amount}`])
-    })
-    if (discount > 0) totalsData.push(['Discount', `-Rs.${discount}`])
-    totalsData.push(['GRAND TOTAL', `Rs.${grandTotal}`])
+  const totalsData = [['Subtotal', `Rs.${subtotal}`]]
+  extras.filter(e => e.label && e.amount).forEach(e => {
+    totalsData.push([e.label, `Rs.${e.amount}`])
+  })
+  if (discount > 0) totalsData.push(['Discount', `-Rs.${discount}`])
+  totalsData.push(['GRAND TOTAL', `Rs.${grandTotal}`])
 
-    autoTable(doc, {
-      startY,
-      body: totalsData,
-      theme: 'plain',
-      styles: { fontSize: 10 },
-      columnStyles: {
-        0: { cellWidth: 120 },
-        1: { cellWidth: 50, halign: 'right' }
-      },
-      didParseCell: (data) => {
-        if (data.row.index === totalsData.length - 1) {
-          data.cell.styles.fontStyle = 'bold'
-          data.cell.styles.fontSize = 12
-        }
+  autoTable(doc, {
+    startY,
+    body: totalsData,
+    theme: 'plain',
+    styles: { fontSize: 10 },
+    columnStyles: {
+      0: { cellWidth: 120 },
+      1: { cellWidth: 50, halign: 'right' }
+    },
+    didParseCell: (data) => {
+      if (data.row.index === totalsData.length - 1) {
+        data.cell.styles.fontStyle = 'bold'
+        data.cell.styles.fontSize = 12
       }
-    })
-
-    if (notes) {
-      doc.setFontSize(9)
-      doc.text(`Notes: ${notes}`, 14, doc.lastAutoTable.finalY + 8)
     }
+  })
 
-    doc.save(`Bill_${billNo}.pdf`)
+  if (notes) {
+    doc.setFontSize(9)
+    doc.text(`Notes: ${notes}`, 14, doc.lastAutoTable.finalY + 8)
   }
+
+  return doc.output('blob')
+}
+
+function exportBillPDF() {
+  const doc = new jsPDF()
+  // ... same code as above but end with:
+  doc.save(`Bill_${savedBillNo}.pdf`)
+}
 
   function exportSellOrderExcel() {
     const billNo = savedBillNo || generateBillNumber()
@@ -603,66 +609,87 @@ export default function Quotation() {
             <span className="text-2xl font-bold text-green-700">₹{grandTotal}</span>
           </div>
 
-          {!billSaved ? (
-            <button
-              onClick={handleSaveBill}
-              disabled={loading}
-              className="w-full bg-blue-700 text-white py-3 rounded font-semibold hover:bg-blue-800 disabled:opacity-50"
-            >
-              {loading ? loadingMsg : '💾 Save Bill & Deduct Inventory'}
-            </button>
-          ) : (
-            <div className="space-y-2">
-              <div className="bg-green-100 text-green-700 px-4 py-3 rounded text-sm font-semibold text-center">
-                ✅ Bill {savedBillNo} saved! Inventory updated.
-              </div>
-              {whatsappMsg && (
+    {!billSaved ? (
+  <button
+    onClick={handleSaveBill}
+    disabled={loading}
+    className="w-full bg-blue-700 text-white py-3 rounded font-semibold hover:bg-blue-800 disabled:opacity-50"
+  >
+    {loading ? loadingMsg : '💾 Save Bill & Deduct Inventory'}
+  </button>
+) : (
   <div className="space-y-2">
-    <div className="text-xs text-gray-500 font-semibold">📲 Notify via WhatsApp:</div>
+    <div className="bg-green-100 text-green-700 px-4 py-3 rounded text-sm font-semibold text-center">
+      ✅ Bill {savedBillNo} saved! Inventory updated.
+    </div>
+
     <button
-      onClick={() => sendWhatsApp(owner, whatsappMsg)}
-      className="w-full bg-green-500 text-white py-2 rounded text-sm font-semibold"
+      onClick={async () => {
+        setLoading(true)
+        setLoadingMsg('Uploading bill...')
+        try {
+          const blob = generateBillPDFBlob()
+          const { uploadPDFAndGetLink } = await import('../lib/supabase')
+          const link = await uploadPDFAndGetLink(blob, `${savedBillNo}.pdf`)
+
+          const customerMsg = `Dear ${customerName},\n\nYour bill ${savedBillNo} is ready.\nAmount: ₹${grandTotal}\n\nView Bill:\n${link}\n\nThank you!\nGanesh Electronics`
+          const internalMsg = `🧾 *New Bill*\nBill: ${savedBillNo}\nCustomer: ${customerName}\nAmount: ₹${grandTotal}\nLink: ${link}\n\n_Ganesh Electronics_`
+
+          if (customerPhone) {
+            window.open(`https://wa.me/91${customerPhone}?text=${encodeURIComponent(customerMsg)}`, '_blank')
+          }
+          setTimeout(() => {
+            window.open(`https://wa.me/${import.meta.env.VITE_OWNER_PHONE}?text=${encodeURIComponent(internalMsg)}`, '_blank')
+          }, 500)
+          setTimeout(() => {
+            window.open(`https://wa.me/${import.meta.env.VITE_PARTNER_PHONE}?text=${encodeURIComponent(internalMsg)}`, '_blank')
+          }, 1000)
+
+        } catch (err) {
+          alert('Error: ' + err.message)
+        }
+        setLoading(false)
+        setLoadingMsg('')
+      }}
+      disabled={loading}
+      className="w-full bg-green-600 text-white py-3 rounded text-sm font-bold disabled:opacity-50"
     >
-      📲 Send to Me
+      {loading ? loadingMsg : '📲 Send Bill to Everyone'}
     </button>
+
     <button
-      onClick={() => sendWhatsApp(partner, whatsappMsg)}
-      className="w-full bg-green-400 text-white py-2 rounded text-sm font-semibold"
+      onClick={exportBillPDF}
+      className="w-full bg-gray-600 text-white py-2 rounded text-sm font-semibold"
     >
-      📲 Send to Partner
+      📥 Download PDF
+    </button>
+
+    <button
+      onClick={exportSellOrderExcel}
+      className="w-full bg-purple-600 text-white py-2 rounded text-sm font-semibold"
+    >
+      📊 Download Sell Order Excel
+    </button>
+
+    <button
+      onClick={() => {
+        setInput('')
+        setSearched(false)
+        setShowBill(false)
+        setBillSaved(false)
+        setAvailable([])
+        setUnavailable([])
+        setAlternatives([])
+        setCustomerName('')
+        setCustomerPhone('')
+        setWhatsappMsg('')
+      }}
+      className="w-full bg-gray-400 text-white py-2 rounded text-sm font-semibold"
+    >
+      🔄 New Quotation
     </button>
   </div>
 )}
-              <button
-                onClick={exportBillPDF}
-                className="w-full bg-blue-700 text-white py-2 rounded text-sm font-semibold hover:bg-blue-800"
-              >
-                📄 Download Bill PDF
-              </button>
-              <button
-                onClick={exportSellOrderExcel}
-                className="w-full bg-green-600 text-white py-2 rounded text-sm font-semibold hover:bg-green-700"
-              >
-                📊 Download Sell Order Excel
-              </button>
-              <button
-                onClick={() => {
-                  setInput('')
-                  setSearched(false)
-                  setShowBill(false)
-                  setBillSaved(false)
-                  setAvailable([])
-                  setUnavailable([])
-                  setAlternatives([])
-                  setCustomerName('')
-                  setCustomerPhone('')
-                }}
-                className="w-full bg-gray-400 text-white py-2 rounded text-sm font-semibold hover:bg-gray-500"
-              >
-                🔄 New Quotation
-              </button>
-            </div>
-          )}
         </div>
       )}
     </div>

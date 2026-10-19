@@ -7,7 +7,7 @@ import Quotation from './pages/Quotation'
 import SellOrders from './pages/SellOrders'
 import Customers from './pages/Customers'
 import Expenses from './pages/Expenses'
-
+import PasswordGate from './components/PasswordGate'
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
 
@@ -22,6 +22,7 @@ export default function App() {
   ]
 
   return (
+     <PasswordGate>
     <BrowserRouter>
       <div className="min-h-screen bg-gray-100">
 
@@ -83,5 +84,6 @@ export default function App() {
 
       </div>
     </BrowserRouter>
+    </PasswordGate>
   )
 }
