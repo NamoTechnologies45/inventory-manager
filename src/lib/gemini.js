@@ -1,101 +1,101 @@
 
+
 import { GoogleGenerativeAI } from '@google/generative-ai'
 
-// --------------------------------------------------
-// 1. INITIALIZE GEMINI
-// --------------------------------------------------
+const genAI = new GoogleGenerativeAI(
+  import.meta.env.VITE_GEMINI_API_KEY
+)
 
-const API_KEY = import.meta.env.VITE_GEMINI_API_KEY
-
-if (!API_KEY) {
-  throw new Error('Missing VITE_GEMINI_API_KEY environment variable')
-}
-
-const genAI = new GoogleGenerativeAI(API_KEY)
-
-const model = genAI.getGenerativeModel({
-  model: 'gemini-3.8-flash',
-  generationConfig: {
-    responseMimeType: 'application/json',
-    temperature: 0.1,
-  },
-})
-
-// --------------------------------------------------
-// 2. HELPER: WAIT BEFORE RETRY
-// --------------------------------------------------
+// Models are tried in this order.
+const MODEL_FALLBACKS = [
+  'gemini-3.8-flash',
+  'gemini-3.6-flash',
+  'gemini-3.5-flash-lite',
+]
 
 const sleep = (ms) =>
   new Promise((resolve) => setTimeout(resolve, ms))
 
-// --------------------------------------------------
-// 3. HELPER: GENERATE JSON WITH AUTOMATIC RETRIES
-// --------------------------------------------------
+function isRetryableError(error) {
+  const message = String(error?.message ?? error)
+  const status = Number(
+    error?.status ??
+    error?.statusCode ??
+    error?.response?.status
+  )
 
-async function generateJson(prompt, maxRetries = 4) {
-  let result
-
-  for (let attempt = 0; ; attempt++) {
-    try {
-      result = await model.generateContent(prompt)
-      break
-    } catch (error) {
-      const message = String(error?.message ?? error)
-
-      const status = Number(
-        error?.status ??
-        error?.statusCode ??
-        error?.response?.status
-      )
-
-      const isRetryable =
-        [408, 429, 500, 502, 503, 504].includes(status) ||
-        /\b(408|429|500|502|503|504)\b/.test(message) ||
-        /UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|overloaded/i.test(
-          message
-        )
-
-      if (!isRetryable || attempt >= maxRetries) {
-        console.error('Gemini API request failed:', error)
-        throw error
-      }
-
-      const delay =
-        Math.min(1000 * 2 ** attempt, 16000) +
-        Math.floor(Math.random() * 1000)
-
-      console.warn(
-        `Gemini request failed. Retrying in ${delay}ms ` +
-        `(${attempt + 1}/${maxRetries})`
-      )
-
-      await sleep(delay)
-    }
-  }
-
-  // Parse outside the retry loop. Invalid JSON is not
-  // automatically retried as though it were a server error.
-  const responseText = result.response.text()
-
-  const cleanText = responseText
-    .replace(/^```(?:json)?\s*/i, '')
-    .replace(/\s*```$/i, '')
-    .trim()
-
-  try {
-    const parsed = JSON.parse(cleanText)
-
-    if (!Array.isArray(parsed)) {
-      throw new Error('Gemini response must be a JSON array')
-    }
-
-    return parsed
-  } catch (error) {
-    console.error('Invalid JSON returned by Gemini:', responseText)
-    throw new Error(
-      `Failed to parse Gemini JSON response: ${error.message}`
+  return (
+    [408, 429, 500, 502, 503, 504].includes(status) ||
+    /\b(408|429|500|502|503|504)\b/.test(message) ||
+    /UNAVAILABLE|RESOURCE_EXHAUSTED|high demand|overloaded/i.test(
+      message
     )
+  )
+}
+
+async function generateJson(prompt) {
+  const errors = []
+
+  for (const modelName of MODEL_FALLBACKS) {
+    const model = genAI.getGenerativeModel({
+      model: modelName,
+      generationConfig: {
+        responseMimeType: 'application/json',
+        temperature: 0.1,
+      },
+    })
+
+    // Try each model up to twice for temporary failures.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        console.info(`Trying Gemini model: ${modelName}`)
+
+        const result = await model.generateContent(prompt)
+        const text = result.response.text()
+
+        const cleaned = text
+          .replace(/^```(?:json)?\s*/i, '')
+          .replace(/\s*```$/i, '')
+          .trim()
+
+        const parsed = JSON.parse(cleaned)
+
+        if (!Array.isArray(parsed)) {
+          throw new Error('Expected a JSON array from Gemini')
+        }
+
+        console.info(`Success with model: ${modelName}`)
+        return parsed
+      } catch (error) {
+        errors.push({
+          model: modelName,
+          message: String(error?.message ?? error),
+        })
+
+        // Do not keep retrying invalid requests or bad JSON.
+        if (!isRetryableError(error)) {
+          console.warn(
+            `${modelName} failed; switching to fallback if available.`,
+            error
+          )
+          break
+        }
+
+        if (attempt === 0) {
+          await sleep(1000 + Math.random() * 1000)
+        } else {
+          console.warn(
+            `${modelName} failed twice; trying the next model.`
+          )
+        }
+      }
+    }
   }
+
+  throw new Error(
+    'All configured Gemini models failed. ' +
+    JSON.stringify(errors)
+  )
 }
 
 // --------------------------------------------------
