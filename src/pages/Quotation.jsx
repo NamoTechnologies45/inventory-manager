@@ -4,7 +4,7 @@ import { parseOrderWithGemini } from '../lib/gemini'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import * as XLSX from 'xlsx'
-
+import { billCreatedMsg, owner, partner, sendWhatsApp } from '../lib/whatsapp'
 function useLocalState(key, defaultValue) {
   const [state, setState] = useState(() => {
     try {
@@ -37,6 +37,7 @@ export default function Quotation() {
   const [savedBillNo, setSavedBillNo] = useLocalState('q_savedBillNo', '')
   const [loading, setLoading] = useState(false)
   const [loadingMsg, setLoadingMsg] = useState('')
+  const [whatsappMsg, setWhatsappMsg] = useLocalState('q_whatsappmsg', '')
 
   async function handleSearch() {
     if (!input.trim()) return
@@ -247,6 +248,7 @@ export default function Quotation() {
 
       setSavedBillNo(billNo)
       setBillSaved(true)
+      setWhatsappMsg(billCreatedMsg(billNo, customerName, grandTotal))
     } catch (err) {
       alert('Error saving bill: ' + err.message)
     }
@@ -614,6 +616,23 @@ export default function Quotation() {
               <div className="bg-green-100 text-green-700 px-4 py-3 rounded text-sm font-semibold text-center">
                 ✅ Bill {savedBillNo} saved! Inventory updated.
               </div>
+              {whatsappMsg && (
+  <div className="space-y-2">
+    <div className="text-xs text-gray-500 font-semibold">📲 Notify via WhatsApp:</div>
+    <button
+      onClick={() => sendWhatsApp(owner, whatsappMsg)}
+      className="w-full bg-green-500 text-white py-2 rounded text-sm font-semibold"
+    >
+      📲 Send to Me
+    </button>
+    <button
+      onClick={() => sendWhatsApp(partner, whatsappMsg)}
+      className="w-full bg-green-400 text-white py-2 rounded text-sm font-semibold"
+    >
+      📲 Send to Partner
+    </button>
+  </div>
+)}
               <button
                 onClick={exportBillPDF}
                 className="w-full bg-blue-700 text-white py-2 rounded text-sm font-semibold hover:bg-blue-800"

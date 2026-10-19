@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../lib/supabase'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
-
+import { paymentReceivedMsg, owner, partner, sendWhatsApp } from '../lib/whatsapp'
 export default function SellOrders() {
   const [bills, setBills] = useState([])
   const [loading, setLoading] = useState(true)
@@ -39,16 +39,20 @@ export default function SellOrders() {
     setBillExtras(extras || [])
   }
 
-  async function markPaid(bill) {
-    await supabase
-      .from('bills')
-      .update({ payment_status: 'paid' })
-      .eq('id', bill.id)
-    fetchBills()
-    if (selected?.id === bill.id) {
-      setSelected({ ...bill, payment_status: 'paid' })
-    }
+const [payMsg, setPayMsg] = useState('')
+
+async function markPaid(bill) {
+  await supabase
+    .from('bills')
+    .update({ payment_status: 'paid' })
+    .eq('id', bill.id)
+  const msg = paymentReceivedMsg(bill.bill_number, bill.customer_name, bill.grand_total)
+  setPayMsg(msg)
+  fetchBills()
+  if (selected?.id === bill.id) {
+    setSelected({ ...bill, payment_status: 'paid' })
   }
+}
 
   async function markPending(bill) {
     await supabase
@@ -233,6 +237,8 @@ export default function SellOrders() {
                   >
                     ✅ Mark as Paid
                   </button>
+                  
+                  
                 ) : (
                   <button
                     onClick={() => markPending(selected)}
@@ -242,6 +248,23 @@ export default function SellOrders() {
                   </button>
                 )}
               </div>
+              {payMsg && (
+  <div className="space-y-2">
+    <div className="text-xs text-gray-500 font-semibold">📲 Notify via WhatsApp:</div>
+    <button
+      onClick={() => sendWhatsApp(owner, payMsg)}
+      className="w-full bg-green-500 text-white py-2 rounded text-sm font-semibold"
+    >
+      📲 Send to Me
+    </button>
+    <button
+      onClick={() => sendWhatsApp(partner, payMsg)}
+      className="w-full bg-green-400 text-white py-2 rounded text-sm font-semibold"
+    >
+      📲 Send to Partner
+    </button>
+  </div>
+)}
             </div>
           </div>
         </div>
