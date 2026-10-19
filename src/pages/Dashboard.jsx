@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { downloadBackup } from "../lib/backup"cd ;
+import { downloadBackup } from '../lib/backup'
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [lowStock, setLowStock] = useState([]);
