@@ -552,34 +552,34 @@ function handleConvertToBill() {
             </div>
           </div>
           <div className="flex gap-2 mt-1">
-            <button
-              onClick={() => {
-                const updated = [...partial]
-                updated[i].included = true
-                setPartial(updated)
-              }}
-              className={`flex-1 py-1 rounded text-xs font-semibold ${
-                item.included
-                  ? 'bg-orange-500 text-white'
-                  : 'bg-gray-100 text-gray-500'
-              }`}
-            >
-              ✅ Take {item.available_qty} available
-            </button>
-            <button
-              onClick={() => {
-                const updated = [...partial]
-                updated[i].included = false
-                setPartial(updated)
-              }}
-              className={`flex-1 py-1 rounded text-xs font-semibold ${
-                !item.included
-                  ? 'bg-red-500 text-white'
-                  : 'bg-gray-100 text-gray-500'
-              }`}
-            >
-              ❌ Skip this part
-            </button>
+        <button
+  onClick={() => {
+    setPartial(prev => prev.map((p, idx) =>
+      idx === i ? { ...p, included: true } : p
+    ))
+  }}
+  className={`flex-1 py-1 rounded text-xs font-semibold ${
+    item.included
+      ? 'bg-orange-500 text-white'
+      : 'bg-gray-100 text-gray-500'
+  }`}
+>
+  ✅ Take {item.available_qty} available
+</button>
+<button
+  onClick={() => {
+    setPartial(prev => prev.map((p, idx) =>
+      idx === i ? { ...p, included: false } : p
+    ))
+  }}
+  className={`flex-1 py-1 rounded text-xs font-semibold ${
+    !item.included
+      ? 'bg-red-500 text-white'
+      : 'bg-gray-100 text-gray-500'
+  }`}
+>
+  ❌ Skip this part
+</button>
           </div>
         </div>
       ))}
@@ -631,14 +631,14 @@ function handleConvertToBill() {
             >
               📄 Download Quotation PDF
             </button>
-            {available.length > 0 && (
-              <button
-                onClick={handleConvertToBill}
-                className="w-full bg-green-600 text-white py-2 rounded text-sm font-semibold hover:bg-green-700"
-              >
-                ✅ Customer Confirmed — Convert to Bill
-              </button>
-            )}
+            {(available.length > 0 || partial.some(i => i.included)) && (
+  <button
+    onClick={handleConvertToBill}
+    className="w-full bg-green-600 text-white py-2 rounded text-sm font-semibold hover:bg-green-700"
+  >
+    ✅ Customer Confirmed — Convert to Bill
+  </button>
+)}
           </div>
         </div>
       )}
