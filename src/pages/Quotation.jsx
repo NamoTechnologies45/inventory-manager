@@ -373,12 +373,71 @@ function handleConvertToBill() {
     return doc.output("blob");
   }
 
-  function exportBillPDF() {
-    const doc = new jsPDF();
-    // ... same code as above but end with:
-    doc.save(`Bill_${savedBillNo}.pdf`);
+function exportBillPDF() {
+  const doc = new jsPDF()
+  const date = new Date().toLocaleDateString('en-IN')
+  const billNo = savedBillNo || generateBillNumber()
+
+  doc.setFontSize(18)
+  doc.setFont('helvetica', 'bold')
+  doc.text('Ganesh Electronics', 14, 18)
+  doc.setFontSize(9)
+  doc.setFont('helvetica', 'normal')
+  doc.text('Tax Invoice / Bill', 14, 25)
+  doc.line(14, 27, 196, 27)
+
+  doc.setFontSize(10)
+  doc.text(`Bill No: ${billNo}`, 14, 34)
+  doc.text(`Date: ${date}`, 140, 34)
+  doc.text(`Customer: ${customerName}`, 14, 41)
+  if (customerPhone) doc.text(`Phone: ${customerPhone}`, 14, 47)
+
+  let startY = customerPhone ? 54 : 48
+
+  autoTable(doc, {
+    startY,
+    head: [['#', 'Part Name', 'Qty', 'Unit Price', 'Total']],
+    body: billItems.map((i, idx) => [
+      idx + 1, i.part_name, i.qty, `Rs.${i.unit_price}`, `Rs.${i.total}`
+    ]),
+    theme: 'striped',
+    headStyles: { fillColor: [29, 78, 216] },
+    styles: { fontSize: 9 }
+  })
+
+  startY = doc.lastAutoTable.finalY + 6
+
+  const totalsData = [['Subtotal', `Rs.${subtotal}`]]
+  extras.filter(e => e.label && e.amount).forEach(e => {
+    totalsData.push([e.label, `Rs.${e.amount}`])
+  })
+  if (discount > 0) totalsData.push(['Discount', `-Rs.${discount}`])
+  totalsData.push(['GRAND TOTAL', `Rs.${grandTotal}`])
+
+  autoTable(doc, {
+    startY,
+    body: totalsData,
+    theme: 'plain',
+    styles: { fontSize: 10 },
+    columnStyles: {
+      0: { cellWidth: 120 },
+      1: { cellWidth: 50, halign: 'right' }
+    },
+    didParseCell: (data) => {
+      if (data.row.index === totalsData.length - 1) {
+        data.cell.styles.fontStyle = 'bold'
+        data.cell.styles.fontSize = 12
+      }
+    }
+  })
+
+  if (notes) {
+    doc.setFontSize(9)
+    doc.text(`Notes: ${notes}`, 14, doc.lastAutoTable.finalY + 8)
   }
 
+  doc.save(`Bill_${billNo}.pdf`)
+}
   function exportSellOrderExcel() {
     const billNo = savedBillNo || generateBillNumber();
     const rows = billItems.map((i) => ({
